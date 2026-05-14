@@ -1,0 +1,175 @@
+# =============================================================
+#  Zabbix 7.0 LTS — Docker Compose V2
+#  Optimized for 4GB RAM server | 500 devices | Large disk
+# =============================================================
+
+services:
+
+  # ── PostgreSQL 15 Alpine (minimal RAM footprint) ──────────
+  postgres-server:
+    image: postgres:15-alpine
+    container_name: zabbix-postgres
+    restart: unless-stopped
+    env_file: .env_all
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
+    command: >
+      postgres
+        -c shared_buffers=512MB
+        -c work_mem=16MB
+        -c maintenance_work_mem=128MB
+        -c effective_cache_size=1GB
+        -c wal_buffers=16MB
+        -c checkpoint_completion_target=0.9
+        -c max_connections=100
+        -c autovacuum=on
+        -c log_min_duration_statement=1000
+        -c random_page_cost=1.1
+        -c effective_io_concurrency=200
+    volumes:
+      # Mount DB on large disk — adjust host path as needed
+      - ./db_data:/var/lib/postgresql/data:rw
+    deploy:
+      resources:
+        limits:
+          memory: 1536M   # hard cap 1.5 GB
+        reservations:
+          memory: 512M
+    networks:
+      - zabbix-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── Zabbix Server ─────────────────────────────────────────
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:7.0-alpine-latest
+    container_name: zabbix-server
+    restart: unless-stopped
+    env_file: .env_all
+    environment:
+      DB_SERVER_HOST:    postgres-server
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
+      ZBX_STARTPINGERS:           ${ZBX_STARTPINGERS}
+      ZBX_STARTPOLLERS:           ${ZBX_STARTPOLLERS}
+      ZBX_STARTIPMIPOLLERS:       ${ZBX_STARTIPMIPOLLERS}
+      ZBX_STARTJAVAPOLLERS:       ${ZBX_STARTJAVAPOLLERS}
+      ZBX_STARTVMWARECOLLECTORS:  ${ZBX_STARTVMWARECOLLECTORS}
+      ZBX_STARTDBSYNCERS:         ${ZBX_STARTDBSYNCERS}
+      ZBX_CACHESIZE:              ${ZBX_CACHESIZE}
+      ZBX_HISTORYCACHESIZE:       ${ZBX_HISTORYCACHESIZE}
+      ZBX_HISTORYINDEXCACHESIZE:  ${ZBX_HISTORYINDEXCACHESIZE}
+      ZBX_TRENDCACHESIZE:         ${ZBX_TRENDCACHESIZE}
+      ZBX_VALUECACHESIZE:         ${ZBX_VALUECACHESIZE}
+      ZBX_HOUSEKEEPINGFREQUENCY:  ${ZBX_HOUSEKEEPINGFREQUENCY}
+      ZBX_MAXHOUSEKEEPERDELETE:   ${ZBX_MAXHOUSEKEEPERDELETE}
+    ports:
+      - "10051:10051"
+    volumes:
+      # Alert scripts & external scripts on large disk
+      - ./zbx_data/alertscripts:/usr/lib/zabbix/alertscripts:ro
+      - ./zbx_data/externalscripts:/usr/lib/zabbix/externalscripts:ro
+      - ./zbx_data/export:/var/lib/zabbix/export:rw
+      - ./zbx_data/modules:/var/lib/zabbix/modules:ro
+      - ./zbx_data/enc:/var/lib/zabbix/enc:ro
+      - ./zbx_data/ssh_keys:/var/lib/zabbix/ssh_keys:ro
+      - ./zbx_data/mibs:/var/lib/zabbix/mibs:ro
+      - ./zbx_data/snmptraps:/var/lib/zabbix/snmptraps:ro
+    deploy:
+      resources:
+        limits:
+          memory: 512M    # hard cap 512 MB
+        reservations:
+          memory: 256M
+    depends_on:
+      postgres-server:
+        condition: service_healthy
+    networks:
+      - zabbix-net
+    healthcheck:
+      test: ["CMD-SHELL", "zabbix_server -R ha_status 2>/dev/null || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ── Zabbix Web UI (Nginx) ─────────────────────────────────
+  zabbix-web-nginx:
+    image: zabbix/zabbix-web-nginx-pgsql:7.0-alpine-latest
+    container_name: zabbix-web
+    restart: unless-stopped
+    env_file: .env_all
+    environment:
+      ZBX_SERVER_HOST:   zabbix-server
+      ZBX_SERVER_PORT:   "10051"
+      DB_SERVER_HOST:    postgres-server
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
+      PHP_TZ:            ${PHP_TZ}
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+    volumes:
+      - ./zbx_data/ssl/nginx:/etc/ssl/nginx:ro
+      - ./zbx_data/modules/:/usr/share/zabbix/modules/:ro
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+    depends_on:
+      - zabbix-server
+      - postgres-server
+    networks:
+      - zabbix-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── Zabbix Agent 2 (monitors the Zabbix host itself) ──────
+  zabbix-agent:
+    image: zabbix/zabbix-agent2:7.0-alpine-latest
+    container_name: zabbix-agent
+    restart: unless-stopped
+    env_file: .env_all
+    environment:
+      ZBX_HOSTNAME:      ${ZBX_HOSTNAME}
+      ZBX_SERVER_HOST:   zabbix-server
+      ZBX_SERVER_ACTIVE: zabbix-server
+    ports:
+      - "10050:10050"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 32M
+    depends_on:
+      - zabbix-server
+    networks:
+      - zabbix-net
+    privileged: false
+    pid: "host"
+
+networks:
+  zabbix-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
