@@ -8,6 +8,7 @@ services:
   # ── PostgreSQL 15 Alpine (minimal RAM footprint) ──────────
   postgres-server:
     image: postgres:15-alpine
+    platform: linux/amd64
     container_name: zabbix-postgres
     restart: unless-stopped
     env_file: .env_all
@@ -49,6 +50,7 @@ services:
   # ── Zabbix Server ─────────────────────────────────────────
   zabbix-server:
     image: zabbix/zabbix-server-pgsql:7.0-alpine-latest
+    platform: linux/amd64
     container_name: zabbix-server
     restart: unless-stopped
     env_file: .env_all
@@ -103,6 +105,7 @@ services:
   # ── Zabbix Web UI (Nginx) ─────────────────────────────────
   zabbix-web-nginx:
     image: zabbix/zabbix-web-nginx-pgsql:7.0-alpine-latest
+    platform: linux/amd64
     container_name: zabbix-web
     restart: unless-stopped
     env_file: .env_all
@@ -141,6 +144,7 @@ services:
   # ── Zabbix Agent 2 (monitors the Zabbix host itself) ──────
   zabbix-agent:
     image: zabbix/zabbix-agent2:7.0-alpine-latest
+    platform: linux/amd64
     container_name: zabbix-agent
     restart: unless-stopped
     env_file: .env_all
