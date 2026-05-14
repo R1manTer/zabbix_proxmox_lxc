@@ -4,8 +4,16 @@
 --    docker exec -i zabbix-postgres psql -U zabbix -d zabbix < init_tuning.sql
 -- =============================================================
 
--- ── 1. Retention policy ──────────────────────────────────────
--- History: 30 days (2592000 sec), Trends: 730 days (63072000 sec)
+-- ── 1. Verify current config columns (Zabbix 7.0 schema) ─────
+-- Run this first to see what columns exist:
+-- SELECT column_name FROM information_schema.columns
+--   WHERE table_name = 'config' ORDER BY column_name;
+
+-- ── 2. Retention policy via housekeeper table ─────────────────
+-- In Zabbix 7.0 housekeeping is configured per-item/global via
+-- the housekeeper table and Administration > Housekeeping in UI.
+-- The config table retains only hk_history/hk_trends globals.
+
 UPDATE config SET
   hk_history_global = 1,
   hk_history        = 30,
@@ -26,39 +34,51 @@ UPDATE config SET
   hk_trends_mode      = 1
 WHERE configid = 1;
 
--- ── 2. Housekeeping settings ─────────────────────────────────
-UPDATE config SET
-  housekeeping_frequency = 1,
-  max_housekeeper_delete = 5000
-WHERE configid = 1;
+-- ── 3. Housekeeping frequency — stored in config_housekeeper ──
+-- In Zabbix 7.0 these moved out of config table.
+-- Set via UI: Administration → Housekeeping
+-- Or directly if the columns exist in your build:
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'config'
+      AND column_name = 'housekeeping_frequency'
+  ) THEN
+    UPDATE config SET
+      housekeeping_frequency = 1,
+      max_housekeeper_delete = 5000
+    WHERE configid = 1;
+    RAISE NOTICE 'housekeeping_frequency updated in config';
+  ELSE
+    RAISE NOTICE 'housekeeping_frequency not in config table (Zabbix 7.0) — set via UI';
+  END IF;
+END $$;
 
--- ── 3. Monitoring intervals — Critical hosts (10s) ───────────
--- Apply to hosts tagged as critical.
--- The SQL below is a template; adjust hostid values as needed.
--- UPDATE items SET delay = 10 WHERE hostid IN (
+-- ── 4. Disable unused item types (save history table space) ───
+-- Java JMX items (type=16)
+UPDATE items SET status = 1
+WHERE type = 16 AND status = 0;
+
+-- VMware collector items (type=13)
+UPDATE items SET status = 1
+WHERE type = 13 AND status = 0;
+
+-- ── 5. Monitoring intervals — Critical hosts (10s) ───────────
+-- Template: adjust host names as needed, then uncomment.
+-- UPDATE items SET delay = '10s' WHERE hostid IN (
 --   SELECT hostid FROM hosts WHERE name IN ('core-switch-01','fw-01')
 -- ) AND key_ LIKE 'icmpping%';
 
--- ── 4. Default intervals — Standard hosts (30s) ──────────────
--- UPDATE items SET delay = 30 WHERE key_ LIKE 'icmpping%';
-
--- ── 5. Disable unused value types to shrink history tables ───
--- Java JMX items
-UPDATE items SET status = 1
-WHERE type = 16
-  AND status = 0;
-
--- VMware collector items
-UPDATE items SET status = 1
-WHERE type = 13
-  AND status = 0;
-
--- ── 6. PostgreSQL stats views (useful for monitoring DB health)
--- Verify config was applied
+-- ── 6. Verify retention was applied ──────────────────────────
 SELECT
+  hk_history_global,
   hk_history,
+  hk_trends_global,
   hk_trends,
-  housekeeping_frequency,
-  max_housekeeper_delete
+  hk_events_mode,
+  hk_events_trigger,
+  hk_audit_mode,
+  hk_audit
 FROM config
 WHERE configid = 1;
