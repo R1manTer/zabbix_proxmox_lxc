@@ -1,11 +1,14 @@
 # =============================================================
 #  Zabbix 7.0 LTS — Docker Compose V2
-#  Optimized for 4GB RAM server | 500 devices | Large disk
+#  Production-ready | 500 devices | 4GB RAM | Large disk
+#  Fixes applied:
+#    - platform: linux/amd64 (exec format error fix)
+#    - healthcheck start_period збільшено
+#    - agent hostname відповідає БД
 # =============================================================
 
 services:
 
-  # ── PostgreSQL 15 Alpine (minimal RAM footprint) ──────────
   postgres-server:
     image: postgres:15-alpine
     platform: linux/amd64
@@ -30,12 +33,11 @@ services:
         -c random_page_cost=1.1
         -c effective_io_concurrency=200
     volumes:
-      # Mount DB on large disk — adjust host path as needed
       - ./db_data:/var/lib/postgresql/data:rw
     deploy:
       resources:
         limits:
-          memory: 1536M   # hard cap 1.5 GB
+          memory: 1536M
         reservations:
           memory: 512M
     networks:
@@ -44,10 +46,9 @@ services:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 30s
+      retries: 10
+      start_period: 60s
 
-  # ── Zabbix Server ─────────────────────────────────────────
   zabbix-server:
     image: zabbix/zabbix-server-pgsql:7.0-alpine-latest
     platform: linux/amd64
@@ -70,12 +71,9 @@ services:
       ZBX_HISTORYINDEXCACHESIZE:  ${ZBX_HISTORYINDEXCACHESIZE}
       ZBX_TRENDCACHESIZE:         ${ZBX_TRENDCACHESIZE}
       ZBX_VALUECACHESIZE:         ${ZBX_VALUECACHESIZE}
-      ZBX_HOUSEKEEPINGFREQUENCY:  ${ZBX_HOUSEKEEPINGFREQUENCY}
-      ZBX_MAXHOUSEKEEPERDELETE:   ${ZBX_MAXHOUSEKEEPERDELETE}
     ports:
       - "10051:10051"
     volumes:
-      # Alert scripts & external scripts on large disk
       - ./zbx_data/alertscripts:/usr/lib/zabbix/alertscripts:ro
       - ./zbx_data/externalscripts:/usr/lib/zabbix/externalscripts:ro
       - ./zbx_data/export:/var/lib/zabbix/export:rw
@@ -87,7 +85,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M    # hard cap 512 MB
+          memory: 512M
         reservations:
           memory: 256M
     depends_on:
@@ -99,10 +97,9 @@ services:
       test: ["CMD-SHELL", "zabbix_server -R ha_status 2>/dev/null || exit 0"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 90s
 
-  # ── Zabbix Web UI (Nginx) ─────────────────────────────────
   zabbix-web-nginx:
     image: zabbix/zabbix-web-nginx-pgsql:7.0-alpine-latest
     platform: linux/amd64
@@ -141,7 +138,6 @@ services:
       retries: 3
       start_period: 30s
 
-  # ── Zabbix Agent 2 (monitors the Zabbix host itself) ──────
   zabbix-agent:
     image: zabbix/zabbix-agent2:7.0-alpine-latest
     platform: linux/amd64
@@ -149,6 +145,7 @@ services:
     restart: unless-stopped
     env_file: .env_all
     environment:
+      # ВАЖЛИВО: має точно співпадати з host.host в БД ("Zabbix server")
       ZBX_HOSTNAME:      ${ZBX_HOSTNAME}
       ZBX_SERVER_HOST:   zabbix-server
       ZBX_SERVER_ACTIVE: zabbix-server
@@ -168,7 +165,6 @@ services:
       - zabbix-server
     networks:
       - zabbix-net
-    privileged: false
     pid: "host"
 
 networks:

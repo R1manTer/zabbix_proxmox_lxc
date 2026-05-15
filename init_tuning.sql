@@ -1,84 +1,65 @@
 -- =============================================================
---  Zabbix 7.0 LTS — Post-Deploy DB & Housekeeping Tuning
---  Run ONCE after first successful start:
---    docker exec -i zabbix-postgres psql -U zabbix -d zabbix < init_tuning.sql
+--  Zabbix 7.0 LTS — Post-Deploy DB Tuning
+--  ФІКСИ:
+--    - hk поля типу VARCHAR потребують суфікс 'd' (наприклад '30d')
+--    - housekeeping_frequency більше не є колонкою config в 7.0
+--  Запуск: ./manage.sh db-tune
 -- =============================================================
 
--- ── 1. Verify current config columns (Zabbix 7.0 schema) ─────
--- Run this first to see what columns exist:
--- SELECT column_name FROM information_schema.columns
---   WHERE table_name = 'config' ORDER BY column_name;
-
--- ── 2. Retention policy via housekeeper table ─────────────────
--- In Zabbix 7.0 housekeeping is configured per-item/global via
--- the housekeeper table and Administration > Housekeeping in UI.
--- The config table retains only hk_history/hk_trends globals.
-
+-- ── 1. Retention policy (VARCHAR поля — обов'язковий суфікс 'd') ──
 UPDATE config SET
-  hk_history_global = 1,
-  hk_history        = 30,
-  hk_trends_global  = 1,
-  hk_trends         = 730,
-  hk_events_mode    = 1,
-  hk_events_trigger = 365,
-  hk_events_internal= 90,
-  hk_events_discovery = 7,
-  hk_events_autoreg   = 7,
-  hk_services_mode    = 1,
-  hk_services         = 365,
-  hk_audit_mode       = 1,
-  hk_audit            = 90,
-  hk_sessions_mode    = 1,
-  hk_sessions         = 30,
-  hk_history_mode     = 1,
-  hk_trends_mode      = 1
+  hk_history_global    = 1,
+  hk_history           = '30d',
+  hk_trends_global     = 1,
+  hk_trends            = '730d',
+  hk_events_mode       = 1,
+  hk_events_trigger    = '365d',
+  hk_events_internal   = '90d',
+  hk_events_discovery  = '7d',
+  hk_events_autoreg    = '7d',
+  hk_services_mode     = 1,
+  hk_services          = '365d',
+  hk_audit_mode        = 1,
+  hk_audit             = '90d',
+  hk_sessions_mode     = 1,
+  hk_sessions          = '30d',
+  hk_history_mode      = 1,
+  hk_trends_mode       = 1
 WHERE configid = 1;
 
--- ── 3. Housekeeping frequency — stored in config_housekeeper ──
--- In Zabbix 7.0 these moved out of config table.
--- Set via UI: Administration → Housekeeping
--- Or directly if the columns exist in your build:
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'config'
-      AND column_name = 'housekeeping_frequency'
-  ) THEN
-    UPDATE config SET
-      housekeeping_frequency = 1,
-      max_housekeeper_delete = 5000
-    WHERE configid = 1;
-    RAISE NOTICE 'housekeeping_frequency updated in config';
-  ELSE
-    RAISE NOTICE 'housekeeping_frequency not in config table (Zabbix 7.0) — set via UI';
-  END IF;
-END $$;
+-- ── 2. housekeeping_frequency в Zabbix 7.0 — налаштовується через UI ──
+-- Administration → Housekeeping → Enable internal housekeeping
+-- Frequency: 1 год, Max housekeeper delete: 5000
+-- (колонки housekeeping_frequency та max_housekeeper_delete видалено з config)
 
--- ── 4. Disable unused item types (save history table space) ───
--- Java JMX items (type=16)
-UPDATE items SET status = 1
-WHERE type = 16 AND status = 0;
+-- ── 3. Вимкнути невикористовувані items (JMX, VMware) ──
+UPDATE items SET status = 1 WHERE type = 16 AND status = 0;
+UPDATE items SET status = 1 WHERE type = 13 AND status = 0;
 
--- VMware collector items (type=13)
-UPDATE items SET status = 1
-WHERE type = 13 AND status = 0;
+-- ── 4. Виправити інтерфейс агента на Docker DNS ім'я ──
+-- (замість 127.0.0.1 використовуємо ім'я контейнера)
+UPDATE interface SET
+  useip = 0,
+  dns   = 'zabbix-agent',
+  ip    = ''
+WHERE interfaceid = (
+  SELECT hi.interfaceid
+  FROM hosts h
+  JOIN interface hi ON hi.hostid = h.hostid
+  WHERE h.host = 'Zabbix server'
+  LIMIT 1
+);
 
--- ── 5. Monitoring intervals — Critical hosts (10s) ───────────
--- Template: adjust host names as needed, then uncomment.
--- UPDATE items SET delay = '10s' WHERE hostid IN (
---   SELECT hostid FROM hosts WHERE name IN ('core-switch-01','fw-01')
--- ) AND key_ LIKE 'icmpping%';
-
--- ── 6. Verify retention was applied ──────────────────────────
+-- ── 5. Перевірка результату ──
 SELECT
-  hk_history_global,
   hk_history,
-  hk_trends_global,
   hk_trends,
-  hk_events_mode,
   hk_events_trigger,
-  hk_audit_mode,
-  hk_audit
-FROM config
-WHERE configid = 1;
+  hk_audit,
+  hk_sessions
+FROM config WHERE configid = 1;
+
+SELECT hi.ip, hi.dns, hi.useip, hi.port
+FROM hosts h
+JOIN interface hi ON hi.hostid = h.hostid
+WHERE h.host = 'Zabbix server';
