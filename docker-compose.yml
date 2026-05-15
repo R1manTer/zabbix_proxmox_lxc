@@ -56,6 +56,7 @@ services:
     restart: unless-stopped
     env_file: .env_all
     environment:
+      TZ: Europe/Kyiv
       DB_SERVER_HOST:    postgres-server
       POSTGRES_USER:     ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -107,6 +108,7 @@ services:
     restart: unless-stopped
     env_file: .env_all
     environment:
+      TZ: Europe/Kyiv
       ZBX_SERVER_HOST:   zabbix-server
       ZBX_SERVER_PORT:   "10051"
       DB_SERVER_HOST:    postgres-server
@@ -145,6 +147,7 @@ services:
     restart: unless-stopped
     env_file: .env_all
     environment:
+      TZ: Europe/Kyiv
       # ВАЖЛИВО: має точно співпадати з host.host в БД ("Zabbix server")
       ZBX_HOSTNAME:      ${ZBX_HOSTNAME}
       ZBX_SERVER_HOST:   zabbix-server
