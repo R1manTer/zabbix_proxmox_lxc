@@ -140,3 +140,9 @@ docker compose --env-file .env_all restart zabbix-server
 
 **Check internal Zabbix queue**
 `Administration → Queue` in the Web UI.
+
+
+## Testing
+
+monitoring RAM
+watch -n 2 'sudo docker stats --no-stream'
